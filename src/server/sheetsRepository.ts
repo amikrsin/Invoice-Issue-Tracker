@@ -447,7 +447,68 @@ class SheetsRepository {
   }
 
   // Tab 2: Entries
+  public async fetchEntriesFromSheet(): Promise<Entry[]> {
+    const sheets = this.getGoogleSheetsClient();
+    const spreadsheetId = this.localStore.config.spreadsheetId;
+    if (!sheets || !spreadsheetId) return this.localStore.entries;
+
+    try {
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: 'Entries!A2:Z10000',
+      });
+      const rows = res.data.values;
+      if (rows && Array.isArray(rows)) {
+        const fetchedEntries: Entry[] = [];
+        rows.forEach((row, idx) => {
+          if (!row || row.length < 3) return;
+          const id = row[0] || `ent_sheet_${idx}`;
+          const invoice_date = row[1] || new Date().toISOString().split('T')[0];
+          const invoice_number = row[2] || '';
+          const vendor_name = row[3] || '';
+          const customer_name = row[4] || '';
+          const issue_description = row[5] || '';
+          const submitted_by_id = row[6] || 'external';
+          const submitted_by_name = row[7] || 'External System';
+          const submitted_at = row[8] || new Date().toISOString();
+          const status = (row[9] as 'active' | 'deleted') || 'active';
+
+          if (invoice_number) {
+            fetchedEntries.push({
+              id,
+              invoice_date,
+              invoice_number,
+              vendor_name,
+              customer_name,
+              issue_description,
+              submitted_by_id,
+              submitted_by_name,
+              submitted_at,
+              status,
+            });
+          }
+        });
+
+        if (fetchedEntries.length > 0) {
+          const map = new Map<string, Entry>();
+          this.localStore.entries.forEach((e) => map.set(e.id, e));
+          fetchedEntries.forEach((e) => map.set(e.id, e));
+
+          const merged = Array.from(map.values());
+          merged.sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+          this.localStore.entries = merged;
+          this.saveLocalStore();
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch entries from Google Sheets on server:', e);
+    }
+
+    return this.localStore.entries;
+  }
+
   public async getEntries(includeDeleted = false): Promise<Entry[]> {
+    await this.fetchEntriesFromSheet().catch(() => {});
     if (includeDeleted) {
       return [...this.localStore.entries];
     }

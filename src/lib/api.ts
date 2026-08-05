@@ -274,6 +274,81 @@ async function getGoogleAccessToken(clientEmail: string, rawPrivateKeyStr: strin
   return tokenData.access_token;
 }
 
+async function fetchDirectClientSheetsEntries(db: ClientDB): Promise<Entry[]> {
+  const spreadsheetId = db.config.spreadsheetId || '1aPGUbvtw_aMifaQ8yAZwBtu57HZZg7TX78-UFX6r5fE';
+  const clientEmail = db.config.clientEmail || 'ais-gemini-key-3f4bb5359c5e446@855232974817.iam.gserviceaccount.com';
+  const privateKey = db.config.privateKey;
+
+  if (!spreadsheetId || !privateKey) {
+    return db.entries;
+  }
+
+  try {
+    const accessToken = await getGoogleAccessToken(clientEmail, privateKey);
+    const readUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Entries!A2:Z10000`;
+    const resp = await fetch(readUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!resp.ok) {
+      return db.entries;
+    }
+
+    const data = await resp.json();
+    const rows = data.values as string[][] | undefined;
+
+    if (!rows || !Array.isArray(rows)) {
+      return db.entries;
+    }
+
+    const fetchedEntries: Entry[] = [];
+    rows.forEach((row, idx) => {
+      if (!row || row.length < 3) return;
+      const id = row[0] || `ent_sheet_${idx}`;
+      const invoice_date = row[1] || new Date().toISOString().split('T')[0];
+      const invoice_number = row[2] || '';
+      const vendor_name = row[3] || '';
+      const customer_name = row[4] || '';
+      const issue_description = row[5] || '';
+      const submitted_by_id = row[6] || 'external';
+      const submitted_by_name = row[7] || 'External System';
+      const submitted_at = row[8] || new Date().toISOString();
+      const status = (row[9] as 'active' | 'deleted') || 'active';
+
+      if (invoice_number) {
+        fetchedEntries.push({
+          id,
+          invoice_date,
+          invoice_number,
+          vendor_name,
+          customer_name,
+          issue_description,
+          submitted_by_id,
+          submitted_by_name,
+          submitted_at,
+          status,
+        });
+      }
+    });
+
+    if (fetchedEntries.length > 0) {
+      const map = new Map<string, Entry>();
+      db.entries.forEach((e) => map.set(e.id, e));
+      fetchedEntries.forEach((e) => map.set(e.id, e));
+
+      const merged = Array.from(map.values());
+      merged.sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+
+      db.entries = merged;
+      localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(db));
+    }
+  } catch (err) {
+    console.warn('Failed to fetch live entries from Google Sheets:', err);
+  }
+
+  return db.entries;
+}
+
 async function performDirectClientSheetsSync(db: ClientDB): Promise<{ success: boolean; message: string; rowsSynced: number }> {
   const spreadsheetId = db.config.spreadsheetId || '1aPGUbvtw_aMifaQ8yAZwBtu57HZZg7TX78-UFX6r5fE';
   const clientEmail = db.config.clientEmail || 'ais-gemini-key-3f4bb5359c5e446@855232974817.iam.gserviceaccount.com';
@@ -286,6 +361,9 @@ async function performDirectClientSheetsSync(db: ClientDB): Promise<{ success: b
   if (!privateKey) {
     throw new Error('Google Sheets Private Key is required. Please open "Sheets Setup" in the header, paste your Service Account Private Key or raw JSON key, and click Save.');
   }
+
+  // Fetch latest from Google Sheets first to merge any rows created externally
+  await fetchDirectClientSheetsEntries(db).catch(() => {});
 
   const accessToken = await getGoogleAccessToken(clientEmail, privateKey);
   let totalRows = 0;
@@ -551,11 +629,24 @@ async function handleClientFallback<T>(endpoint: string, options: RequestInit, t
     };
     db.auditLogs.unshift(log);
     saveClientDB(db);
-    return { entry: newEntry, message: 'Invoice issue logged successfully' } as T;
+
+    if (db.config.privateKey) {
+      try {
+        await performDirectClientSheetsSync(db);
+      } catch (e) {
+        console.error('Direct sheets sync failed on create entry:', e);
+      }
+    }
+
+    return { entry: newEntry, message: 'Invoice issue logged successfully and synced to Google Sheets' } as unknown as T;
   }
 
   // 12. Get Entries
   if (endpoint.startsWith('/api/entries') && method === 'GET') {
+    if (db.config.privateKey) {
+      await fetchDirectClientSheetsEntries(db).catch(() => {});
+    }
+
     const url = new URL(endpoint, 'http://localhost');
     const includeDeleted = url.searchParams.get('includeDeleted') === 'true';
     const vendorName = url.searchParams.get('vendorName');
@@ -569,7 +660,7 @@ async function handleClientFallback<T>(endpoint: string, options: RequestInit, t
       filtered = filtered.filter((e) => e.customer_name.toLowerCase().includes(customerName.toLowerCase()));
     }
 
-    return { entries: filtered } as T;
+    return { entries: filtered } as unknown as T;
   }
 
   // 13. Audit logs for entry
@@ -717,6 +808,9 @@ async function handleClientFallback<T>(endpoint: string, options: RequestInit, t
 
   // 21. Dashboard Summary
   if (endpoint === '/api/dashboard/summary' && method === 'GET') {
+    if (db.config.privateKey) {
+      await fetchDirectClientSheetsEntries(db).catch(() => {});
+    }
     const active = db.entries.filter((e) => e.status === 'active');
     const deleted = db.entries.filter((e) => e.status === 'deleted');
     const pendingCorr = db.correctionRequests.filter((r) => r.status === 'pending').length;
