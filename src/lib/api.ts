@@ -666,8 +666,18 @@ async function handleClientFallback<T>(endpoint: string, options: RequestInit, t
     const includeDeleted = url.searchParams.get('includeDeleted') === 'true';
     const vendorName = url.searchParams.get('vendorName');
     const customerName = url.searchParams.get('customerName');
+    const submittedBy = url.searchParams.get('submittedBy');
 
     let filtered = db.entries.filter((e) => (includeDeleted ? true : e.status === 'active'));
+
+    // Non-admin can only view their own entries
+    if (currentUser && currentUser.role !== 'admin') {
+      filtered = filtered.filter((e) => e.submitted_by_id === currentUser.id || e.submitted_by_name?.toLowerCase() === currentUser.name?.toLowerCase());
+    } else if (submittedBy) {
+      const term = submittedBy.toLowerCase();
+      filtered = filtered.filter((e) => e.submitted_by_name?.toLowerCase().includes(term) || e.submitted_by_id === submittedBy);
+    }
+
     if (vendorName) {
       filtered = filtered.filter((e) => e.vendor_name.toLowerCase().includes(vendorName.toLowerCase()));
     }
@@ -822,13 +832,37 @@ async function handleClientFallback<T>(endpoint: string, options: RequestInit, t
   }
 
   // 21. Dashboard Summary
-  if (endpoint === '/api/dashboard/summary' && method === 'GET') {
+  if (endpoint.startsWith('/api/dashboard/summary') && method === 'GET') {
     if (db.config.privateKey) {
       await fetchDirectClientSheetsEntries(db).catch(() => {});
     }
-    const active = db.entries.filter((e) => e.status === 'active');
-    const deleted = db.entries.filter((e) => e.status === 'deleted');
-    const pendingCorr = db.correctionRequests.filter((r) => r.status === 'pending').length;
+
+    const url = new URL(endpoint, 'http://localhost');
+    const targetUserId = url.searchParams.get('userId');
+
+    let allEntries = [...db.entries];
+
+    if (currentUser && currentUser.role !== 'admin') {
+      allEntries = allEntries.filter((e) => e.submitted_by_id === currentUser.id || e.submitted_by_name?.toLowerCase() === currentUser.name?.toLowerCase());
+    } else if (targetUserId && targetUserId !== 'all') {
+      const targetUserObj = db.users.find((u) => u.id === targetUserId || u.username === targetUserId);
+      if (targetUserObj) {
+        allEntries = allEntries.filter((e) => e.submitted_by_id === targetUserObj.id || e.submitted_by_name?.toLowerCase() === targetUserObj.name?.toLowerCase());
+      } else {
+        allEntries = allEntries.filter((e) => e.submitted_by_id === targetUserId || e.submitted_by_name?.toLowerCase() === targetUserId.toLowerCase());
+      }
+    }
+
+    const active = allEntries.filter((e) => e.status === 'active');
+    const deleted = allEntries.filter((e) => e.status === 'deleted');
+
+    let corrList = [...db.correctionRequests];
+    if (currentUser && currentUser.role !== 'admin') {
+      corrList = corrList.filter((r) => r.requested_by_id === currentUser.id);
+    } else if (targetUserId && targetUserId !== 'all') {
+      corrList = corrList.filter((r) => r.requested_by_id === targetUserId);
+    }
+    const pendingCorr = corrList.filter((r) => r.status === 'pending').length;
 
     // Top vendors
     const vendorCounts: Record<string, number> = {};
@@ -850,15 +884,25 @@ async function handleClientFallback<T>(endpoint: string, options: RequestInit, t
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
 
+    // Trend data
+    const monthCounts: Record<string, number> = {};
+    active.forEach((e) => {
+      const month = e.invoice_date.substring(0, 7) || 'Unknown';
+      monthCounts[month] = (monthCounts[month] || 0) + 1;
+    });
+    const trendData = Object.entries(monthCounts)
+      .map(([period, count]) => ({ period, count }))
+      .sort((a, b) => a.period.localeCompare(b.period));
+
     return {
       summary: {
-        totalIssues: db.entries.length,
+        totalIssues: allEntries.length,
         totalActiveIssues: active.length,
         totalDeletedIssues: deleted.length,
         pendingCorrectionRequests: pendingCorr,
         topVendors,
         topCustomers,
-        trendData: [],
+        trendData,
         recentEntries: active.slice(0, 5),
       },
     } as T;
@@ -1057,8 +1101,10 @@ export const api = {
     ),
 
   // Dashboard
-  getDashboardSummary: () =>
-    request<{ summary: DashboardSummary }>('/api/dashboard/summary'),
+  getDashboardSummary: (options?: { userId?: string }) => {
+    const query = options?.userId ? `?userId=${encodeURIComponent(options.userId)}` : '';
+    return request<{ summary: DashboardSummary }>(`/api/dashboard/summary${query}`);
+  },
 
   // Sheets Config
   getSheetsConfig: () =>

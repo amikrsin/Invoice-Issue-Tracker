@@ -318,6 +318,11 @@ app.get('/api/entries', authenticateUser, async (req: Request, res: Response) =>
 
   let entries = await sheetsRepo.getEntries(includeDeleted);
 
+  // A non-admin user can view their own entries only
+  if (user.role !== 'admin') {
+    entries = entries.filter(e => e.submitted_by_id === user.id || e.submitted_by_name?.toLowerCase() === user.name?.toLowerCase());
+  }
+
   // Apply filters if provided
   const { startDate, endDate, vendorName, customerName, submittedBy } = req.query;
 
@@ -335,7 +340,7 @@ app.get('/api/entries', authenticateUser, async (req: Request, res: Response) =>
     const term = String(customerName).toLowerCase();
     entries = entries.filter(e => e.customer_name.toLowerCase().includes(term));
   }
-  if (submittedBy) {
+  if (user.role === 'admin' && submittedBy) {
     const term = String(submittedBy).toLowerCase();
     entries = entries.filter(e => e.submitted_by_name.toLowerCase().includes(term) || e.submitted_by_id === submittedBy);
   }
@@ -527,11 +532,33 @@ app.patch('/api/correction-requests/:id', authenticateUser, requireAdmin, async 
 
 // 6. Dashboard Metrics
 app.get('/api/dashboard/summary', authenticateUser, async (req: Request, res: Response) => {
-  const allEntries = await sheetsRepo.getEntries(true);
+  const user: User = (req as any).currentUser;
+  const targetUserId = req.query.userId ? String(req.query.userId) : null;
+
+  let allEntries = await sheetsRepo.getEntries(true);
+
+  // A non-admin user can view their own dashboard metrics only.
+  // Admins can view overall system dashboard (when userId is missing or 'all') or any specific user's dashboard.
+  if (user.role !== 'admin') {
+    allEntries = allEntries.filter(e => e.submitted_by_id === user.id || e.submitted_by_name?.toLowerCase() === user.name?.toLowerCase());
+  } else if (targetUserId && targetUserId !== 'all') {
+    const targetUserObj = (await sheetsRepo.getUsers()).find(u => u.id === targetUserId || u.username === targetUserId);
+    if (targetUserObj) {
+      allEntries = allEntries.filter(e => e.submitted_by_id === targetUserObj.id || e.submitted_by_name?.toLowerCase() === targetUserObj.name?.toLowerCase());
+    } else {
+      allEntries = allEntries.filter(e => e.submitted_by_id === targetUserId || e.submitted_by_name?.toLowerCase() === targetUserId.toLowerCase());
+    }
+  }
+
   const activeEntries = allEntries.filter(e => e.status === 'active');
   const deletedEntries = allEntries.filter(e => e.status === 'deleted');
 
-  const correctionRequests = await sheetsRepo.getCorrectionRequests();
+  let correctionRequests = await sheetsRepo.getCorrectionRequests();
+  if (user.role !== 'admin') {
+    correctionRequests = correctionRequests.filter(c => c.requested_by_id === user.id);
+  } else if (targetUserId && targetUserId !== 'all') {
+    correctionRequests = correctionRequests.filter(c => c.requested_by_id === targetUserId);
+  }
   const pendingCorrections = correctionRequests.filter(c => c.status === 'pending').length;
 
   // Top vendors

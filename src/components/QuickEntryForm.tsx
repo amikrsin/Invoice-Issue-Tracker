@@ -82,151 +82,184 @@ export const QuickEntryForm: React.FC<QuickEntryFormProps> = ({
         </div>
 
         <div className="p-5 sm:p-6">
-          {/* Success Notification Banner */}
+          {/* Success Screen (Shown instead of the form after submission) */}
           {successEntry ? (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl mb-5 space-y-3">
-              <div className="flex items-start space-x-3">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div className="space-y-5 py-2">
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-sm">
+                  <CheckCircle2 className="w-7 h-7" />
+                </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-emerald-900">
+                  <h3 className="text-base font-bold text-emerald-900">
                     Issue Logged Successfully
                   </h3>
-                  <p className="text-xs text-emerald-700 mt-0.5">
-                    Invoice <span className="font-mono font-bold">#{successEntry.invoice_number}</span> ({successEntry.vendor_name}) has been appended to the repository.
+                  <p className="text-xs text-emerald-700 mt-1">
+                    Invoice <span className="font-mono font-bold">#{successEntry.invoice_number}</span> has been logged and synced to Google Sheets.
                   </p>
+                </div>
+
+                <div className="bg-white/80 border border-emerald-200/80 rounded-xl p-3 text-left text-xs space-y-1.5 text-slate-700">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Invoice Date:</span>
+                    <span className="font-mono font-semibold">{successEntry.invoice_date}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Vendor:</span>
+                    <span className="font-semibold text-slate-900">{successEntry.vendor_name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Customer:</span>
+                    <span className="font-semibold text-slate-900">{successEntry.customer_name}</span>
+                  </div>
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2 pt-1 border-t border-emerald-200/80">
+              <div className="flex flex-col sm:flex-row items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setSuccessEntry(null)}
-                  className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition-colors text-center"
+                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow transition-colors flex items-center justify-center space-x-1.5"
                 >
-                  Log Another Issue
+                  <PlusCircle className="w-4 h-4" />
+                  <span>Log Another Issue</span>
                 </button>
                 <button
                   type="button"
                   onClick={onViewEntries}
-                  className="flex-1 py-2 px-3 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-medium rounded-lg transition-colors text-center flex items-center justify-center space-x-1"
+                  className="w-full py-2.5 px-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold rounded-xl shadow-sm transition-colors flex items-center justify-center space-x-1"
                 >
-                  <span>View All Entries</span>
+                  <span>View Entries</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
-          ) : null}
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {error && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-                <span>{error}</span>
+              {/* Row 1: Date & Number */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
+                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Invoice Date *</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={invoiceDate}
+                    onChange={(e) => {
+                      setInvoiceDate(e.target.value);
+                      if (error) setError(null);
+                    }}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-mono"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
+                    <Hash className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Invoice No. *</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={invoiceNumber}
+                    onChange={(e) => {
+                      setInvoiceNumber(e.target.value);
+                      if (error) setError(null);
+                    }}
+                    placeholder="e.g. INV-9042"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-mono"
+                    required
+                  />
+                </div>
               </div>
-            )}
 
-            {/* Row 1: Date & Number */}
-            <div className="grid grid-cols-2 gap-3">
+              {/* Vendor Name */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Invoice Date *</span>
-                </label>
-                <input
-                  type="date"
-                  value={invoiceDate}
-                  onChange={(e) => setInvoiceDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
-                  <Hash className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Invoice No. *</span>
+                  <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Vendor Name *</span>
                 </label>
                 <input
                   type="text"
-                  value={invoiceNumber}
-                  onChange={(e) => setInvoiceNumber(e.target.value)}
-                  placeholder="e.g. INV-9042"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-mono"
+                  value={vendorName}
+                  onChange={(e) => {
+                    setVendorName(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  placeholder="Vendor issuing this bill (e.g. Apex Logistics)"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
                   required
                 />
               </div>
-            </div>
 
-            {/* Vendor Name */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
-                <Building2 className="w-3.5 h-3.5 text-slate-400" />
-                <span>Vendor Name *</span>
-              </label>
-              <input
-                type="text"
-                value={vendorName}
-                onChange={(e) => setVendorName(e.target.value)}
-                placeholder="Vendor issuing this bill (e.g. Apex Logistics)"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
-                required
-              />
-            </div>
+              {/* Customer Name */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
+                  <UserCheck className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Customer Name *</span>
+                </label>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => {
+                    setCustomerName(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  placeholder="Customer related to this vendor bill (e.g. Acme Corp)"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+                  required
+                />
+              </div>
 
-            {/* Customer Name */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
-                <UserCheck className="w-3.5 h-3.5 text-slate-400" />
-                <span>Customer Name *</span>
-              </label>
-              <input
-                type="text"
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Customer related to this vendor bill (e.g. Acme Corp)"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
-                required
-              />
-            </div>
+              {/* Issue Description */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
+                  <FileText className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Issue Description *</span>
+                </label>
+                <textarea
+                  value={issueDescription}
+                  onChange={(e) => {
+                    setIssueDescription(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  rows={3}
+                  placeholder="Describe discrepancy, missing tax credit, pricing error, or dispute details..."
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all resize-none"
+                  required
+                />
+              </div>
 
-            {/* Issue Description */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
-                <FileText className="w-3.5 h-3.5 text-slate-400" />
-                <span>Issue Description *</span>
-              </label>
-              <textarea
-                value={issueDescription}
-                onChange={(e) => setIssueDescription(e.target.value)}
-                rows={3}
-                placeholder="Describe discrepancy, missing tax credit, pricing error, or dispute details..."
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all resize-none"
-                required
-              />
-            </div>
+              {/* Auto-filled Submitter Footer */}
+              <div className="p-2.5 bg-slate-100 rounded-xl border border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
+                <div>Submitted by: <strong className="text-slate-900">{currentUser.name}</strong></div>
+                <div className="text-slate-400 font-mono text-[10px]">Auto-Captured</div>
+              </div>
 
-            {/* Auto-filled Submitter Footer */}
-            <div className="p-2.5 bg-slate-100 rounded-xl border border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
-              <div>Submitted by: <strong className="text-slate-900">{currentUser.name}</strong></div>
-              <div className="text-slate-400 font-mono text-[10px]">Auto-Captured</div>
-            </div>
-
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-md shadow-indigo-600/20 flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
-            >
-              {loading ? (
-                <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  <PlusCircle className="w-4 h-4" />
-                  <span>Submit Invoice Issue Entry</span>
-                </>
-              )}
-            </button>
-          </form>
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-md shadow-indigo-600/20 flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
+              >
+                {loading ? (
+                  <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <PlusCircle className="w-4 h-4" />
+                    <span>Submit Invoice Issue Entry</span>
+                  </>
+                )}
+              </button>
+            </form>
+          )}
         </div>
       </div>
     </div>

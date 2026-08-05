@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../lib/api';
-import { DashboardSummary } from '../types';
+import { DashboardSummary, User } from '../types';
 import {
   BarChart,
   Bar,
@@ -21,18 +21,31 @@ import {
   AlertTriangle,
   ExternalLink,
   RefreshCw,
+  Filter,
+  UserCheck,
 } from 'lucide-react';
 
-export const DashboardView: React.FC = () => {
+interface DashboardViewProps {
+  currentUser: User;
+}
+
+export const DashboardView: React.FC<DashboardViewProps> = ({ currentUser }) => {
+  const isAdmin = currentUser.role === 'admin';
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Admin dashboard scope filter
+  const [selectedUserId, setSelectedUserId] = useState<string>('all');
+  const [usersList, setUsersList] = useState<User[]>([]);
 
   const fetchSummary = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.getDashboardSummary();
+      const res = await api.getDashboardSummary({
+        userId: !isAdmin ? currentUser.id : selectedUserId,
+      });
       setSummary(res.summary);
     } catch (err: any) {
       setError(err.message || 'Failed to load executive dashboard summary');
@@ -42,8 +55,16 @@ export const DashboardView: React.FC = () => {
   };
 
   useEffect(() => {
+    if (isAdmin) {
+      api.getUsers().then((res) => {
+        if (res.users) setUsersList(res.users);
+      }).catch(() => {});
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
     fetchSummary();
-  }, []);
+  }, [selectedUserId, currentUser.id]);
 
   if (loading) {
     return (
@@ -62,28 +83,66 @@ export const DashboardView: React.FC = () => {
     );
   }
 
+  const selectedUserObj = usersList.find(u => u.id === selectedUserId);
+
   return (
     <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center space-x-2">
             <BarChart3 className="w-6 h-6 text-indigo-600" />
-            <span>Executive Risk & Invoice Dashboard</span>
+            <span>
+              {isAdmin
+                ? 'Executive Risk & Invoice Dashboard'
+                : `Executive Dashboard - ${currentUser.name}`}
+            </span>
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Real-time aggregate overview of logged vendor & customer invoice disputes.
+            {isAdmin
+              ? 'Real-time aggregate overview of logged vendor & customer invoice disputes.'
+              : `Viewing issue metrics, vendor breakdowns, and trends logged by ${currentUser.name}.`}
           </p>
         </div>
 
-        <button
-          onClick={fetchSummary}
-          className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-xl shadow-sm transition-colors flex items-center space-x-1.5 w-fit"
-        >
-          <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-          <span>Refresh Data</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          {isAdmin && (
+            <div className="flex items-center space-x-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm text-xs">
+              <Filter className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+              <span className="font-semibold text-slate-600 hidden sm:inline">Scope:</span>
+              <select
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="bg-transparent font-medium text-slate-800 focus:outline-none cursor-pointer"
+              >
+                <option value="all">📊 All Users (System Summary)</option>
+                {usersList.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    👤 {u.name} ({u.role === 'admin' ? 'Admin' : 'User'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <button
+            onClick={fetchSummary}
+            className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-xl shadow-sm transition-colors flex items-center space-x-1.5 shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+            <span>Refresh Data</span>
+          </button>
+        </div>
       </div>
+
+      {isAdmin && selectedUserId !== 'all' && selectedUserObj && (
+        <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-900 flex items-center space-x-2">
+          <UserCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+          <span>
+            Filtering executive report for user: <strong>{selectedUserObj.name}</strong> ({selectedUserObj.username})
+          </span>
+        </div>
+      )}
 
       {/* Looker Studio Notice Box */}
       <div className="p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl border border-indigo-800/50 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">

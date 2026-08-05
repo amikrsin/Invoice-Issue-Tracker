@@ -160,7 +160,7 @@ export default function App() {
         )}
 
         {activeTab === 'dashboard' && (
-          <DashboardView />
+          <DashboardView currentUser={currentUser} />
         )}
       </main>
 
