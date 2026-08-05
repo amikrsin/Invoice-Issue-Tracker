@@ -172,12 +172,200 @@ function getClientDB(): ClientDB {
 function saveClientDB(db: ClientDB) {
   try {
     localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(db));
+    if (db.config.privateKey) {
+      performDirectClientSheetsSync(db).catch(() => {});
+    }
   } catch (e) {
     console.error('Failed to save local client DB', e);
   }
 }
 
-function handleClientFallback<T>(endpoint: string, options: RequestInit, token: string | null): T {
+async function getGoogleAccessToken(clientEmail: string, rawPrivateKeyStr: string): Promise<string> {
+  let pem = rawPrivateKeyStr.replace(/\\n/g, '\n').trim();
+
+  if (pem.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(pem);
+      if (parsed.client_email) clientEmail = parsed.client_email;
+      if (parsed.private_key) pem = parsed.private_key.replace(/\\n/g, '\n').trim();
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  const pemHeader = '-----BEGIN PRIVATE KEY-----';
+  const pemFooter = '-----END PRIVATE KEY-----';
+
+  let base64 = pem;
+  if (base64.includes(pemHeader)) {
+    base64 = base64.substring(base64.indexOf(pemHeader) + pemHeader.length);
+  }
+  if (base64.includes(pemFooter)) {
+    base64 = base64.substring(0, base64.indexOf(pemFooter));
+  }
+
+  base64 = base64.replace(/\s+/g, '');
+
+  if (!base64) {
+    throw new Error('Invalid Service Account Private Key format.');
+  }
+
+  const binaryDerString = atob(base64);
+  const binaryDer = new Uint8Array(binaryDerString.length);
+  for (let i = 0; i < binaryDerString.length; i++) {
+    binaryDer[i] = binaryDerString.charCodeAt(i);
+  }
+
+  const cryptoKey = await window.crypto.subtle.importKey(
+    'pkcs8',
+    binaryDer.buffer,
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      hash: 'SHA-256',
+    },
+    false,
+    ['sign']
+  );
+
+  const encoder = new TextEncoder();
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: clientEmail,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now,
+  };
+
+  function base64url(arr: Uint8Array | string) {
+    let str = typeof arr === 'string' ? btoa(arr) : btoa(String.fromCharCode(...new Uint8Array(arr)));
+    return str.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  }
+
+  const encodedHeader = base64url(JSON.stringify(header));
+  const encodedPayload = base64url(JSON.stringify(payload));
+  const unsignedJwt = `${encodedHeader}.${encodedPayload}`;
+
+  const signature = await window.crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    cryptoKey,
+    encoder.encode(unsignedJwt)
+  );
+
+  const signedJwt = `${unsignedJwt}.${base64url(new Uint8Array(signature))}`;
+
+  const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: signedJwt,
+    }),
+  });
+
+  const tokenData = await tokenResp.json();
+  if (!tokenResp.ok) {
+    throw new Error(
+      tokenData.error_description || tokenData.error || 'Failed to authenticate service account with Google OAuth2'
+    );
+  }
+
+  return tokenData.access_token;
+}
+
+async function performDirectClientSheetsSync(db: ClientDB): Promise<{ success: boolean; message: string; rowsSynced: number }> {
+  const spreadsheetId = db.config.spreadsheetId || '1aPGUbvtw_aMifaQ8yAZwBtu57HZZg7TX78-UFX6r5fE';
+  const clientEmail = db.config.clientEmail || 'ais-gemini-key-3f4bb5359c5e446@855232974817.iam.gserviceaccount.com';
+  const privateKey = db.config.privateKey;
+
+  if (!spreadsheetId) {
+    throw new Error('Spreadsheet ID is not configured.');
+  }
+
+  if (!privateKey) {
+    throw new Error('Google Sheets Private Key is required. Please open "Sheets Setup" in the header, paste your Service Account Private Key or raw JSON key, and click Save.');
+  }
+
+  const accessToken = await getGoogleAccessToken(clientEmail, privateKey);
+  let totalRows = 0;
+
+  async function updateSheetTab(tabName: string, headers: string[], rows: any[][]) {
+    const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${tabName}!A1:Z10000:clear`;
+    await fetch(clearUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }).catch(() => {});
+
+    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${tabName}!A1?valueInputOption=USER_ENTERED`;
+    const updateResp = await fetch(updateUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        values: [headers, ...rows],
+      }),
+    });
+
+    if (!updateResp.ok) {
+      const errJson = await updateResp.json().catch(() => ({}));
+      if (updateResp.status === 403 || errJson.error?.status === 'PERMISSION_DENIED') {
+        throw new Error(`Google Sheets Access Permission Error: The Service Account (${clientEmail}) does not have permission to write to Google Spreadsheet (${spreadsheetId}). Please open your Google Sheet, click the top-right 'Share' button, and add '${clientEmail}' as an Editor.`);
+      }
+      throw new Error(errJson.error?.message || `Failed to update tab ${tabName} in Google Sheets`);
+    }
+  }
+
+  // 1. Users Tab
+  const userHeaders = ['id', 'username', 'name', 'role', 'must_reset_password', 'is_active', 'created_by', 'created_at'];
+  const userRows = db.users.map(u => [
+    u.id, u.username, u.name, u.role, u.must_reset_password ? 'true' : 'false', u.is_active ? 'true' : 'false', u.created_by, u.created_at
+  ]);
+  await updateSheetTab('Users', userHeaders, userRows);
+  totalRows += userRows.length;
+
+  // 2. Entries Tab
+  const entryHeaders = ['id', 'invoice_date', 'invoice_number', 'vendor_name', 'customer_name', 'issue_description', 'submitted_by_id', 'submitted_by_name', 'submitted_at', 'status'];
+  const entryRows = db.entries.map(e => [
+    e.id, e.invoice_date, e.invoice_number, e.vendor_name, e.customer_name, e.issue_description, e.submitted_by_id, e.submitted_by_name, e.submitted_at, e.status
+  ]);
+  await updateSheetTab('Entries', entryHeaders, entryRows);
+  totalRows += entryRows.length;
+
+  // 3. AuditLog Tab
+  const auditHeaders = ['id', 'entry_id', 'admin_id', 'admin_name', 'action', 'reason', 'created_at'];
+  const auditRows = db.auditLogs.map(a => [
+    a.id, a.entry_id, a.admin_id, a.admin_name || '', a.action, a.reason, a.created_at
+  ]);
+  await updateSheetTab('AuditLog', auditHeaders, auditRows);
+  totalRows += auditRows.length;
+
+  // 4. CorrectionRequests Tab
+  const corrHeaders = ['id', 'entry_id', 'requested_by_id', 'request_details', 'status', 'admin_response', 'resolved_by_id', 'created_at', 'resolved_at'];
+  const corrRows = db.correctionRequests.map(r => [
+    r.id, r.entry_id, r.requested_by_id, r.request_details, r.status, r.admin_response || '', r.resolved_by_id || '', r.created_at, r.resolved_at || ''
+  ]);
+  await updateSheetTab('CorrectionRequests', corrHeaders, corrRows);
+  totalRows += corrRows.length;
+
+  // 5. PasswordResetRequests Tab
+  const resetHeaders = ['id', 'username', 'user_id', 'status', 'resolved_by_id', 'created_at', 'resolved_at'];
+  const resetRows = db.passwordResetRequests.map(p => [
+    p.id, p.username, p.user_id || '', p.status, p.resolved_by_id || '', p.created_at, p.resolved_at || ''
+  ]);
+  await updateSheetTab('PasswordResetRequests', resetHeaders, resetRows);
+  totalRows += resetRows.length;
+
+  return {
+    success: true,
+    message: `Successfully transferred ${totalRows} data rows across all 5 sheets in Google Spreadsheet ID ${spreadsheetId}.`,
+    rowsSynced: totalRows,
+  };
+}
+
+async function handleClientFallback<T>(endpoint: string, options: RequestInit, token: string | null): Promise<T> {
   const db = getClientDB();
   const method = (options.method || 'GET').toUpperCase();
   const body = options.body ? JSON.parse(options.body as string) : {};
@@ -572,35 +760,41 @@ function handleClientFallback<T>(endpoint: string, options: RequestInit, token: 
     if (method === 'POST') {
       db.config.spreadsheetId = body.spreadsheetId || db.config.spreadsheetId;
       if (body.clientEmail) db.config.clientEmail = body.clientEmail;
-      if (body.privateKey) db.config.privateKey = body.privateKey;
+      if (body.privateKey) {
+        let pk = body.privateKey;
+        if (pk.includes('{') && pk.includes('private_key')) {
+          try {
+            const parsed = JSON.parse(pk);
+            if (parsed.client_email) db.config.clientEmail = parsed.client_email;
+            if (parsed.private_key) pk = parsed.private_key;
+          } catch (e) {}
+        }
+        db.config.privateKey = pk;
+      }
       saveClientDB(db);
       return {
         config: {
           spreadsheetId: db.config.spreadsheetId,
           serviceAccountEmail: db.config.clientEmail,
-          isConnected: !!db.config.spreadsheetId,
+          isConnected: !!db.config.spreadsheetId && !!db.config.privateKey,
           hasCredentials: !!db.config.privateKey,
         },
         message: 'Google Sheets configuration saved.',
-      } as T;
+      } as unknown as T;
     }
     return {
       config: {
         spreadsheetId: db.config.spreadsheetId,
         serviceAccountEmail: db.config.clientEmail,
-        isConnected: !!db.config.spreadsheetId,
+        isConnected: !!db.config.spreadsheetId && !!db.config.privateKey,
         hasCredentials: !!db.config.privateKey,
       },
-    } as T;
+    } as unknown as T;
   }
 
   // 23. Sheets Sync All
   if (endpoint === '/api/admin/sheets-sync-all' && method === 'POST') {
-    return {
-      success: true,
-      message: `Client-side mode active on Cloudflare Workers. Local storage synchronized across all tabs (${db.entries.length} entries).`,
-      rowsSynced: db.entries.length,
-    } as T;
+    return (await performDirectClientSheetsSync(db)) as unknown as T;
   }
 
   throw new Error(`Fallback route not implemented: ${endpoint}`);
