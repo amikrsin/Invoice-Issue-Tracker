@@ -1,0 +1,17 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+data/
+data/sheets_store.json
+*.pem
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!components.json
+!metadata.json

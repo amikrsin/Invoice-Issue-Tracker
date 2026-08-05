@@ -1,0 +1,6 @@
+{
+  "name": "Invoice Issue Tracker",
+  "description": "Internal invoice issue tracking system with immutable audit logging, correction requests, and Google Sheets repository backend.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
