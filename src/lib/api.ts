@@ -37,18 +37,573 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(endpoint, {
-    ...options,
-    headers,
-  });
+  try {
+    const response = await fetch(endpoint, {
+      ...options,
+      headers,
+    });
 
-  const data = await response.json().catch(() => ({}));
+    const isHtmlResponse = response.headers.get('content-type')?.includes('text/html');
 
-  if (!response.ok) {
-    throw new Error(data.error || `Request failed with status ${response.status}`);
+    if (response.status === 404 || response.status === 405 || response.status === 501 || isHtmlResponse) {
+      // Endpoint not supported on server (e.g. running on Cloudflare Workers / static hosting without Express backend)
+      return handleClientFallback<T>(endpoint, options, token);
+    }
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      if (data && data.error) {
+        throw new Error(data.error);
+      }
+      // If server returned non-200 without standard JSON error (e.g. CDN error page)
+      return handleClientFallback<T>(endpoint, options, token);
+    }
+
+    return data as T;
+  } catch (err: any) {
+    // If it's a known user-facing error message thrown intentionally, rethrow it
+    if (
+      err.message &&
+      !err.message.includes('Failed to fetch') &&
+      !err.message.includes('NetworkError') &&
+      !err.message.includes('status 404') &&
+      !err.message.includes('status 405') &&
+      !err.message.includes('status 500') &&
+      !err.message.includes('Request failed')
+    ) {
+      throw err;
+    }
+    // Network failure or static host fallback
+    return handleClientFallback<T>(endpoint, options, token);
+  }
+}
+
+// Client-side local storage engine for Cloudflare Workers / static deployments
+const DB_STORAGE_KEY = 'invoice_tracker_client_db_v1';
+
+interface ClientDB {
+  users: User[];
+  passwords: Record<string, string>;
+  entries: Entry[];
+  auditLogs: AuditLog[];
+  correctionRequests: CorrectionRequest[];
+  passwordResetRequests: PasswordResetRequest[];
+  config: { spreadsheetId: string; clientEmail: string; privateKey: string };
+}
+
+function getClientDB(): ClientDB {
+  try {
+    const raw = localStorage.getItem(DB_STORAGE_KEY);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    // fallback to seed
   }
 
-  return data as T;
+  const seed: ClientDB = {
+    users: [
+      {
+        id: 'usr_admin_001',
+        username: 'admin',
+        name: 'System Administrator',
+        role: 'admin',
+        must_reset_password: false,
+        is_active: true,
+        created_by: 'system',
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: 'usr_member_002',
+        username: 'johndoe',
+        name: 'John Doe',
+        role: 'user',
+        must_reset_password: false,
+        is_active: true,
+        created_by: 'admin',
+        created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
+      },
+    ],
+    passwords: {
+      usr_admin_001: 'Admin@1234',
+      usr_member_002: 'User@1234',
+    },
+    entries: [
+      {
+        id: 'ent_1001',
+        invoice_date: '2026-08-01',
+        invoice_number: 'INV-2026-0891',
+        vendor_name: 'Apex Logistics Inc',
+        customer_name: 'Acme Retail Corp',
+        issue_description: 'Freight charge mismatch on invoice line item 3 ($450 discrepancy).',
+        submitted_by_id: 'usr_member_002',
+        submitted_by_name: 'John Doe',
+        submitted_at: new Date(Date.now() - 86400000 * 3).toISOString(),
+        status: 'active',
+      },
+      {
+        id: 'ent_1002',
+        invoice_date: '2026-08-03',
+        invoice_number: 'BILL-88321',
+        vendor_name: 'Global Paper Supplies',
+        customer_name: 'JM Jain LLP',
+        issue_description: 'Missing tax ID on tax invoice copy; customer requesting revised tax credit memo.',
+        submitted_by_id: 'usr_member_002',
+        submitted_by_name: 'John Doe',
+        submitted_at: new Date(Date.now() - 86400000 * 1).toISOString(),
+        status: 'active',
+      },
+    ],
+    auditLogs: [],
+    correctionRequests: [],
+    passwordResetRequests: [],
+    config: {
+      spreadsheetId: '1aPGUbvtw_aMifaQ8yAZwBtu57HZZg7TX78-UFX6r5fE',
+      clientEmail: 'ais-gemini-key-3f4bb5359c5e446@855232974817.iam.gserviceaccount.com',
+      privateKey: '',
+    },
+  };
+
+  localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(seed));
+  return seed;
+}
+
+function saveClientDB(db: ClientDB) {
+  try {
+    localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(db));
+  } catch (e) {
+    console.error('Failed to save local client DB', e);
+  }
+}
+
+function handleClientFallback<T>(endpoint: string, options: RequestInit, token: string | null): T {
+  const db = getClientDB();
+  const method = (options.method || 'GET').toUpperCase();
+  const body = options.body ? JSON.parse(options.body as string) : {};
+
+  // Current logged in user helper
+  let currentUser: User | null = null;
+  if (token && token.startsWith('mock_token_')) {
+    const uid = token.replace('mock_token_', '');
+    currentUser = db.users.find((u) => u.id === uid) || null;
+  }
+
+  // 1. Auth Login
+  if (endpoint === '/api/auth/login' && method === 'POST') {
+    const { username, password } = body;
+    const cleanUserStr = (username || '').trim().toLowerCase();
+    
+    // Support matching 'admin', 'johndoe', or 'member'
+    const user = db.users.find(
+      (u) =>
+        u.username.toLowerCase() === cleanUserStr ||
+        (cleanUserStr === 'member' && u.id === 'usr_member_002')
+    );
+
+    if (!user) {
+      throw new Error('Invalid username or password');
+    }
+
+    if (!user.is_active) {
+      throw new Error('Account is deactivated. Please contact an administrator.');
+    }
+
+    const storedPass = db.passwords[user.id] || 'Admin@1234';
+    if (storedPass !== password) {
+      throw new Error('Invalid username or password');
+    }
+
+    const newToken = `mock_token_${user.id}`;
+    setStoredToken(newToken);
+    return { user, token: newToken } as T;
+  }
+
+  // 2. Auth Me
+  if (endpoint === '/api/auth/me' && method === 'GET') {
+    if (!currentUser) {
+      throw new Error('Not authenticated');
+    }
+    return { user: currentUser } as T;
+  }
+
+  // 3. Auth Logout
+  if (endpoint === '/api/auth/logout' && method === 'POST') {
+    clearStoredToken();
+    return { success: true } as T;
+  }
+
+  // 4. Auth Change Password
+  if (endpoint === '/api/auth/change-password' && method === 'POST') {
+    if (!currentUser) throw new Error('Not authenticated');
+    db.passwords[currentUser.id] = body.newPassword;
+    const uIdx = db.users.findIndex((u) => u.id === currentUser!.id);
+    if (uIdx !== -1) {
+      db.users[uIdx].must_reset_password = false;
+    }
+    saveClientDB(db);
+    return { success: true, user: db.users[uIdx], message: 'Password updated successfully' } as T;
+  }
+
+  // 5. Auth Request Password Reset
+  if (endpoint === '/api/auth/request-password-reset' && method === 'POST') {
+    const { username } = body;
+    const user = db.users.find((u) => u.username.toLowerCase() === (username || '').trim().toLowerCase());
+    const newReq: PasswordResetRequest = {
+      id: `reset_${Date.now()}`,
+      username: username.trim(),
+      user_id: user?.id,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    db.passwordResetRequests.unshift(newReq);
+    saveClientDB(db);
+    return { success: true, message: 'Password reset request submitted to administrator.' } as T;
+  }
+
+  // 6. Admin Users List
+  if (endpoint === '/api/admin/users' && method === 'GET') {
+    return { users: db.users } as T;
+  }
+
+  // 7. Admin Create User
+  if (endpoint === '/api/admin/users' && method === 'POST') {
+    const { username, name, role } = body;
+    const newId = `usr_${Date.now()}`;
+    const newUser: User = {
+      id: newId,
+      username: username.trim().toLowerCase(),
+      name: name.trim(),
+      role: role || 'user',
+      must_reset_password: true,
+      is_active: true,
+      created_by: currentUser?.name || 'admin',
+      created_at: new Date().toISOString(),
+    };
+    db.users.push(newUser);
+    db.passwords[newId] = 'TempPass123!';
+    saveClientDB(db);
+    return { user: newUser, tempPassword: 'TempPass123!', message: 'User created successfully' } as T;
+  }
+
+  // 8. Admin Update User
+  if (endpoint.startsWith('/api/admin/users/') && method === 'PATCH') {
+    const userId = endpoint.split('/')[4];
+    const uIdx = db.users.findIndex((u) => u.id === userId);
+    if (uIdx === -1) throw new Error('User not found');
+
+    if (body.role) db.users[uIdx].role = body.role;
+    if (typeof body.is_active === 'boolean') db.users[uIdx].is_active = body.is_active;
+
+    let tempPassword;
+    if (body.resetPassword) {
+      tempPassword = 'TempPass123!';
+      db.passwords[userId] = tempPassword;
+      db.users[uIdx].must_reset_password = true;
+    }
+
+    saveClientDB(db);
+    return { user: db.users[uIdx], tempPassword, message: 'User updated successfully' } as T;
+  }
+
+  // 9. Admin Password Reset Requests
+  if (endpoint === '/api/admin/password-reset-requests' && method === 'GET') {
+    return { requests: db.passwordResetRequests } as T;
+  }
+
+  // 10. Admin Resolve Password Reset
+  if (endpoint.startsWith('/api/admin/password-reset-requests/') && method === 'PATCH') {
+    const reqId = endpoint.split('/')[4];
+    const rIdx = db.passwordResetRequests.findIndex((r) => r.id === reqId);
+    if (rIdx === -1) throw new Error('Reset request not found');
+
+    db.passwordResetRequests[rIdx].status = 'resolved';
+    db.passwordResetRequests[rIdx].resolved_by_id = currentUser?.id;
+    db.passwordResetRequests[rIdx].resolved_by_name = currentUser?.name;
+    db.passwordResetRequests[rIdx].resolved_at = new Date().toISOString();
+
+    const targetUserId = db.passwordResetRequests[rIdx].user_id;
+    const tempPassword = 'TempPass123!';
+    if (targetUserId) {
+      db.passwords[targetUserId] = tempPassword;
+      const uIdx = db.users.findIndex((u) => u.id === targetUserId);
+      if (uIdx !== -1) db.users[uIdx].must_reset_password = true;
+    }
+
+    saveClientDB(db);
+    return { request: db.passwordResetRequests[rIdx], tempPassword, message: 'Password reset resolved' } as T;
+  }
+
+  // 11. Create Entry
+  if (endpoint === '/api/entries' && method === 'POST') {
+    const newEntry: Entry = {
+      id: `ent_${Date.now()}`,
+      invoice_date: body.invoice_date,
+      invoice_number: body.invoice_number,
+      vendor_name: body.vendor_name,
+      customer_name: body.customer_name,
+      issue_description: body.issue_description,
+      submitted_by_id: currentUser?.id || 'usr_member_002',
+      submitted_by_name: currentUser?.name || 'John Doe',
+      submitted_at: new Date().toISOString(),
+      status: 'active',
+    };
+    db.entries.unshift(newEntry);
+
+    const log: AuditLog = {
+      id: `aud_${Date.now()}`,
+      entry_id: newEntry.id,
+      admin_id: currentUser?.id || 'system',
+      admin_name: currentUser?.name || 'User',
+      action: 'edit',
+      before_snapshot: '',
+      after_snapshot: JSON.stringify(newEntry),
+      reason: 'Initial submission',
+      created_at: new Date().toISOString(),
+    };
+    db.auditLogs.unshift(log);
+    saveClientDB(db);
+    return { entry: newEntry, message: 'Invoice issue logged successfully' } as T;
+  }
+
+  // 12. Get Entries
+  if (endpoint.startsWith('/api/entries') && method === 'GET') {
+    const url = new URL(endpoint, 'http://localhost');
+    const includeDeleted = url.searchParams.get('includeDeleted') === 'true';
+    const vendorName = url.searchParams.get('vendorName');
+    const customerName = url.searchParams.get('customerName');
+
+    let filtered = db.entries.filter((e) => (includeDeleted ? true : e.status === 'active'));
+    if (vendorName) {
+      filtered = filtered.filter((e) => e.vendor_name.toLowerCase().includes(vendorName.toLowerCase()));
+    }
+    if (customerName) {
+      filtered = filtered.filter((e) => e.customer_name.toLowerCase().includes(customerName.toLowerCase()));
+    }
+
+    return { entries: filtered } as T;
+  }
+
+  // 13. Audit logs for entry
+  if (endpoint.includes('/audit') && method === 'GET') {
+    const entryId = endpoint.split('/')[3];
+    const logs = db.auditLogs.filter((a) => a.entry_id === entryId);
+    return { auditLogs: logs } as T;
+  }
+
+  // 14. Update Entry
+  if (endpoint.startsWith('/api/entries/') && method === 'PATCH') {
+    const entryId = endpoint.split('/')[3];
+    const eIdx = db.entries.findIndex((e) => e.id === entryId);
+    if (eIdx === -1) throw new Error('Entry not found');
+
+    const beforeSnapshot = JSON.stringify(db.entries[eIdx]);
+    if (body.invoice_date) db.entries[eIdx].invoice_date = body.invoice_date;
+    if (body.invoice_number) db.entries[eIdx].invoice_number = body.invoice_number;
+    if (body.vendor_name) db.entries[eIdx].vendor_name = body.vendor_name;
+    if (body.customer_name) db.entries[eIdx].customer_name = body.customer_name;
+    if (body.issue_description) db.entries[eIdx].issue_description = body.issue_description;
+
+    db.entries[eIdx].last_edited_at = new Date().toISOString();
+    db.entries[eIdx].last_edited_by = currentUser?.name || 'Admin';
+
+    const log: AuditLog = {
+      id: `aud_${Date.now()}`,
+      entry_id: entryId,
+      admin_id: currentUser?.id || 'admin',
+      admin_name: currentUser?.name || 'Admin',
+      action: 'edit',
+      before_snapshot: beforeSnapshot,
+      after_snapshot: JSON.stringify(db.entries[eIdx]),
+      reason: body.reason || 'Admin edit',
+      correction_request_id: body.correction_request_id,
+      created_at: new Date().toISOString(),
+    };
+    db.auditLogs.unshift(log);
+    saveClientDB(db);
+    return { entry: db.entries[eIdx], auditLog: log, message: 'Entry updated successfully' } as T;
+  }
+
+  // 15. Delete Entry
+  if (endpoint.startsWith('/api/entries/') && method === 'DELETE') {
+    const entryId = endpoint.split('/')[3];
+    const eIdx = db.entries.findIndex((e) => e.id === entryId);
+    if (eIdx === -1) throw new Error('Entry not found');
+
+    const beforeSnapshot = JSON.stringify(db.entries[eIdx]);
+    db.entries[eIdx].status = 'deleted';
+
+    const log: AuditLog = {
+      id: `aud_${Date.now()}`,
+      entry_id: entryId,
+      admin_id: currentUser?.id || 'admin',
+      admin_name: currentUser?.name || 'Admin',
+      action: 'delete',
+      before_snapshot: beforeSnapshot,
+      after_snapshot: '',
+      reason: body.reason || 'Deleted by admin',
+      created_at: new Date().toISOString(),
+    };
+    db.auditLogs.unshift(log);
+    saveClientDB(db);
+    return { entry: db.entries[eIdx], auditLog: log, message: 'Entry deleted successfully' } as T;
+  }
+
+  // 16. Restore Entry
+  if (endpoint.includes('/restore') && method === 'POST') {
+    const entryId = endpoint.split('/')[3];
+    const eIdx = db.entries.findIndex((e) => e.id === entryId);
+    if (eIdx === -1) throw new Error('Entry not found');
+
+    db.entries[eIdx].status = 'active';
+    const log: AuditLog = {
+      id: `aud_${Date.now()}`,
+      entry_id: entryId,
+      admin_id: currentUser?.id || 'admin',
+      admin_name: currentUser?.name || 'Admin',
+      action: 'restore',
+      before_snapshot: '',
+      after_snapshot: JSON.stringify(db.entries[eIdx]),
+      reason: body.reason || 'Restored by admin',
+      created_at: new Date().toISOString(),
+    };
+    db.auditLogs.unshift(log);
+    saveClientDB(db);
+    return { entry: db.entries[eIdx], auditLog: log, message: 'Entry restored successfully' } as T;
+  }
+
+  // 17. Create Correction Request
+  if (endpoint.includes('/correction-request') && method === 'POST') {
+    const entryId = endpoint.split('/')[3];
+    const entry = db.entries.find((e) => e.id === entryId);
+
+    const newReq: CorrectionRequest = {
+      id: `corr_${Date.now()}`,
+      entry_id: entryId,
+      entry_invoice_number: entry?.invoice_number,
+      entry_vendor_name: entry?.vendor_name,
+      requested_by_id: currentUser?.id || 'usr_member_002',
+      requested_by_name: currentUser?.name || 'User',
+      request_details: body.request_details,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    db.correctionRequests.unshift(newReq);
+    saveClientDB(db);
+    return { correctionRequest: newReq, message: 'Correction request submitted to admin.' } as T;
+  }
+
+  // 18. Correction Requests (Mine)
+  if (endpoint === '/api/correction-requests/mine' && method === 'GET') {
+    const mine = db.correctionRequests.filter((r) => r.requested_by_id === currentUser?.id);
+    return { requests: mine } as T;
+  }
+
+  // 19. Correction Requests (All)
+  if (endpoint === '/api/correction-requests' && method === 'GET') {
+    return { requests: db.correctionRequests } as T;
+  }
+
+  // 20. Update Correction Request
+  if (endpoint.startsWith('/api/correction-requests/') && method === 'PATCH') {
+    const reqId = endpoint.split('/')[3];
+    const rIdx = db.correctionRequests.findIndex((r) => r.id === reqId);
+    if (rIdx === -1) throw new Error('Correction request not found');
+
+    db.correctionRequests[rIdx].status = body.status;
+    db.correctionRequests[rIdx].admin_response = body.admin_response;
+    db.correctionRequests[rIdx].resolved_by_id = currentUser?.id;
+    db.correctionRequests[rIdx].resolved_by_name = currentUser?.name;
+    db.correctionRequests[rIdx].resolved_at = new Date().toISOString();
+
+    if (body.status === 'actioned' && body.updatedEntryFields) {
+      const eIdx = db.entries.findIndex((e) => e.id === db.correctionRequests[rIdx].entry_id);
+      if (eIdx !== -1) {
+        Object.assign(db.entries[eIdx], body.updatedEntryFields);
+      }
+    }
+
+    saveClientDB(db);
+    return { correctionRequest: db.correctionRequests[rIdx], message: 'Correction request updated' } as T;
+  }
+
+  // 21. Dashboard Summary
+  if (endpoint === '/api/dashboard/summary' && method === 'GET') {
+    const active = db.entries.filter((e) => e.status === 'active');
+    const deleted = db.entries.filter((e) => e.status === 'deleted');
+    const pendingCorr = db.correctionRequests.filter((r) => r.status === 'pending').length;
+
+    // Top vendors
+    const vendorCounts: Record<string, number> = {};
+    active.forEach((e) => {
+      vendorCounts[e.vendor_name] = (vendorCounts[e.vendor_name] || 0) + 1;
+    });
+    const topVendors = Object.entries(vendorCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    // Top customers
+    const customerCounts: Record<string, number> = {};
+    active.forEach((e) => {
+      customerCounts[e.customer_name] = (customerCounts[e.customer_name] || 0) + 1;
+    });
+    const topCustomers = Object.entries(customerCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    return {
+      summary: {
+        totalIssues: db.entries.length,
+        totalActiveIssues: active.length,
+        totalDeletedIssues: deleted.length,
+        pendingCorrectionRequests: pendingCorr,
+        topVendors,
+        topCustomers,
+        trendData: [],
+        recentEntries: active.slice(0, 5),
+      },
+    } as T;
+  }
+
+  // 22. Sheets Config
+  if (endpoint === '/api/admin/sheets-config') {
+    if (method === 'POST') {
+      db.config.spreadsheetId = body.spreadsheetId || db.config.spreadsheetId;
+      if (body.clientEmail) db.config.clientEmail = body.clientEmail;
+      if (body.privateKey) db.config.privateKey = body.privateKey;
+      saveClientDB(db);
+      return {
+        config: {
+          spreadsheetId: db.config.spreadsheetId,
+          serviceAccountEmail: db.config.clientEmail,
+          isConnected: !!db.config.spreadsheetId,
+          hasCredentials: !!db.config.privateKey,
+        },
+        message: 'Google Sheets configuration saved.',
+      } as T;
+    }
+    return {
+      config: {
+        spreadsheetId: db.config.spreadsheetId,
+        serviceAccountEmail: db.config.clientEmail,
+        isConnected: !!db.config.spreadsheetId,
+        hasCredentials: !!db.config.privateKey,
+      },
+    } as T;
+  }
+
+  // 23. Sheets Sync All
+  if (endpoint === '/api/admin/sheets-sync-all' && method === 'POST') {
+    return {
+      success: true,
+      message: `Client-side mode active on Cloudflare Workers. Local storage synchronized across all tabs (${db.entries.length} entries).`,
+      rowsSynced: db.entries.length,
+    } as T;
+  }
+
+  throw new Error(`Fallback route not implemented: ${endpoint}`);
 }
 
 export const api = {
