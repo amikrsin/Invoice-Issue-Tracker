@@ -92,11 +92,26 @@ interface ClientDB {
   config: { spreadsheetId: string; clientEmail: string; privateKey: string };
 }
 
+const DEFAULT_CONFIG = {
+  spreadsheetId: '1aPGUbvtw_aMifaQ8yAZwBtu57HZZg7TX78-UFX6r5fE',
+  clientEmail: 'ais-gemini-key-3f4bb5359c5e446@855232974817.iam.gserviceaccount.com',
+  privateKey: `-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDLkxUqmp3gdaqL\nCPYnYnaFJrjk4XJFuk7TUqCrAxa2+3zwTRqO3CjaM6JVNzlA3bAdwHl/4PDlZAQp\n5vRBmeV7EYMJ1KWIkW2gcGyHwjnKV1Nmw8mwNpEoPaC5zvY0BAD+3Ck6qlwOkeCC\nHURLgMjL3Ok0TdHZ8F52iWpA4HUFWb31KLh7rpuO4szP76+vzBETiiyfm6NGKg1b\nLj6BPdbVG8aeqLmEqBLVu7SDdHO2rh0+Jby3SrxaJmbL0FU4aDZmA3W0WoZfkB02\n8pFKjAUuG4LwpM+GNMsyG6QzTwzs9hFI2v8Kv6080asWoUMocT0XnDKGt0VkBkWh\nUTZNVOZpAgMBAAECggEACxEJKt0SOAwteTbDgDXvZiL0v3yB+chnAJXn+2PvmC2T\nsnx+inBCyESGTpucln92qNINyNCG8pwSnd8wPWC1rjsFee4AEayA3nfow83ggQoT\nk+07dEODIJeOZTYbAY42Kk9NmSLUXku6fgLuniwiE52uumkrP0MR34puJu4Mw9Lu\n5NuUW8Oono+Hy1CkL84pd3D4JsdD3jcuGEeRsHn1S4SNhYutvV+o05wYCyQB0cRN\neHXaceWZL57K87OOqw1OedWoAAUKSCrx/SfHy6uGX4nNtShTX0aaolaOwzZqFv9z\n35NHiSE4HnCJgA7CcOApvBAJGMPZxFp/w11TfRgUAQKBgQDxURcpd/2Amg+AzaGr\nv/GkPrEyIHZwPF1knyOhiYlRwRJf1h/1yNAvPk71F+fyFeNVnofd4Pr+MTkxTBV5\nfZHaJOSlfBA2G0SrNet4Rrva5gEaV7rd8JdEnas95hIAuy1PIvQuVbahXE6Q3GiK\nwgN3qdU5vQ4uymj17NEVVZZADQKBgQDX9hgth1TQcxcOS6mk3OfwQtooT6qQ638g\nubfihW5bS6oX4MiHTIJdm6uG8rsYlyeTvIDrT2kBngGG8s6dvvV77s+8RGIZqj4R\nnRF49WUYn9nXCxEv43YbZftvLjUxjddOezth09TWP7LRwOjUBOZ+ayi1eQR/yHIX\n6BAdiU8MzQKBgGDa6zD5uAWl0BMidYE5yQLjJru3y9HAaLu6I9LyIOtvUrCkgK9l\nqilMGOTGc5H2twfmWSH06sibeRkQMI5Sl/e2Vw8UfG07BJSzT4821K9HIaoxDA+I\nQS6JGfH+JbulZMoefWMbg/G/2sjJriwDMuEUiUBjYQ3mr7oFEuY9M9EBAoGBAIH2\nMACeE1VKHVLWB6YV5mI46O4fWybRAXUhLl7cK1g3hYnPFP4O9dj9SFDym9Mli4Sl\niPOSmz+E5ahfUCWv+Cz3vv2uLVcCk02oNw6Spp8V+1Mk7tfhy36bdZ8nsI08rZgm\nIssxXkD8nlEKBVMqC8eCF0J2LFX1u2tVlPUhX3f1AoGBAKcgX8dBXy8CGfHdUv8/\n3pq/nh9UO9tvIxeCuciozL9xdWcXTGe+ZFNM5hde5SSoQfROpiECW0n6JWp2QutV\nRp9hXkAJhQ5eSBZa+8+V0dYBgE12pycPDe/MlCZOBjzV+AIFIDpxFEJCntA7gzs7\n/v9ALGCHaPJj+tVtP+VRGR5g\n-----END PRIVATE KEY-----`,
+};
+
 function getClientDB(): ClientDB {
   try {
     const raw = localStorage.getItem(DB_STORAGE_KEY);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw) as ClientDB;
+      if (!parsed.config || !parsed.config.privateKey) {
+        parsed.config = {
+          spreadsheetId: parsed.config?.spreadsheetId || DEFAULT_CONFIG.spreadsheetId,
+          clientEmail: parsed.config?.clientEmail || DEFAULT_CONFIG.clientEmail,
+          privateKey: DEFAULT_CONFIG.privateKey,
+        };
+        localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(parsed));
+      }
+      return parsed;
     }
   } catch (e) {
     // fallback to seed
@@ -159,9 +174,9 @@ function getClientDB(): ClientDB {
     correctionRequests: [],
     passwordResetRequests: [],
     config: {
-      spreadsheetId: '1aPGUbvtw_aMifaQ8yAZwBtu57HZZg7TX78-UFX6r5fE',
-      clientEmail: 'ais-gemini-key-3f4bb5359c5e446@855232974817.iam.gserviceaccount.com',
-      privateKey: '',
+      spreadsheetId: DEFAULT_CONFIG.spreadsheetId,
+      clientEmail: DEFAULT_CONFIG.clientEmail,
+      privateKey: DEFAULT_CONFIG.privateKey,
     },
   };
 
