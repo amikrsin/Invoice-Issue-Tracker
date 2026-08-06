@@ -2,49 +2,40 @@ const CACHE_NAME = 'invoice-tracker-v1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
-  '/manifest.json'
+  '/manifest.json',
+  '/sw.js',
+  '/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png'
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    })
+self.addEventListener('install', (e) => {
+  e.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS_TO_CACHE))
   );
   self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME)
-          .map((name) => caches.delete(name))
-      );
-    })
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    Promise.all([
+      self.clients.claim(),
+      caches.keys().then((keys) =>
+        Promise.all(
+          keys.map((key) => {
+            if (key !== CACHE_NAME) return caches.delete(key);
+          })
+        )
+      )
+    ])
   );
-  self.clients.claim();
 });
 
-self.addEventListener('fetch', (event) => {
-  // Only handle GET requests and skip API requests from cache
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
+self.addEventListener('fetch', (e) => {
+  if (e.request.method !== 'GET' || e.request.url.includes('/api/')) {
     return;
   }
-
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Fetch fresh copy in background
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {});
-        return cachedResponse;
-      }
-      return fetch(event.request);
-    })
+  e.respondWith(
+    fetch(e.request).catch(() => caches.match(e.request))
   );
 });

@@ -692,6 +692,21 @@ app.get('/icon.svg', (req: Request, res: Response) => {
   }
 });
 
+app.get('/icons/:iconName', (req: Request, res: Response) => {
+  const iconName = req.params.iconName;
+  const filePath = getAssetPath(path.join('icons', iconName));
+  if (filePath) {
+    if (iconName.endsWith('.png')) {
+      res.setHeader('Content-Type', 'image/png');
+    } else if (iconName.endsWith('.svg')) {
+      res.setHeader('Content-Type', 'image/svg+xml');
+    }
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send('Icon file not found');
+  }
+});
+
 app.use(express.static(publicPath));
 app.use(express.static(distPath));
 
