@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { sheetsRepo } from './src/server/sheetsRepository.js';
 import { User, Role, Entry, CorrectionRequest, AuditLog, PasswordResetRequest } from './src/types.js';
@@ -643,18 +644,33 @@ app.post('/api/admin/sheets-sync-all', authenticateUser, requireAdmin, async (re
 const publicPath = path.join(process.cwd(), 'public');
 
 app.get('/manifest.json', (req: Request, res: Response) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.sendFile(path.join(publicPath, 'manifest.json'));
+  const filePath = path.join(publicPath, 'manifest.json');
+  if (fs.existsSync(filePath)) {
+    res.setHeader('Content-Type', 'application/json');
+    res.sendFile(filePath);
+  } else {
+    res.status(404).json({ error: 'manifest.json file not found' });
+  }
 });
 
 app.get('/sw.js', (req: Request, res: Response) => {
-  res.setHeader('Content-Type', 'application/javascript');
-  res.sendFile(path.join(publicPath, 'sw.js'));
+  const filePath = path.join(publicPath, 'sw.js');
+  if (fs.existsSync(filePath)) {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send('sw.js file not found');
+  }
 });
 
 app.get('/icon.svg', (req: Request, res: Response) => {
-  res.setHeader('Content-Type', 'image/svg+xml');
-  res.sendFile(path.join(publicPath, 'icon.svg'));
+  const filePath = path.join(publicPath, 'icon.svg');
+  if (fs.existsSync(filePath)) {
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send('icon.svg file not found');
+  }
 });
 
 app.use(express.static(publicPath));
