@@ -15,3 +15,7 @@ data/sheets_store.json
 !tsconfig.json
 !components.json
 !metadata.json
+!public/*.json
+!public/**/*.json
+!wrangler.json
+!wrangler.jsonc
