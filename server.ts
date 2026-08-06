@@ -642,10 +642,19 @@ app.post('/api/admin/sheets-sync-all', authenticateUser, requireAdmin, async (re
 // ---------------- STATIC PWA ASSET ROUTES ----------------
 
 const publicPath = path.join(process.cwd(), 'public');
+const distPath = path.join(process.cwd(), 'dist');
+
+const getAssetPath = (filename: string): string | null => {
+  const pPath = path.join(publicPath, filename);
+  if (fs.existsSync(pPath)) return pPath;
+  const dPath = path.join(distPath, filename);
+  if (fs.existsSync(dPath)) return dPath;
+  return null;
+};
 
 app.get('/manifest.json', (req: Request, res: Response) => {
-  const filePath = path.join(publicPath, 'manifest.json');
-  if (fs.existsSync(filePath)) {
+  const filePath = getAssetPath('manifest.json');
+  if (filePath) {
     res.setHeader('Content-Type', 'application/json');
     res.sendFile(filePath);
   } else {
@@ -653,9 +662,19 @@ app.get('/manifest.json', (req: Request, res: Response) => {
   }
 });
 
+app.get('/_routes.json', (req: Request, res: Response) => {
+  const filePath = getAssetPath('_routes.json');
+  if (filePath) {
+    res.setHeader('Content-Type', 'application/json');
+    res.sendFile(filePath);
+  } else {
+    res.status(404).json({ error: '_routes.json file not found' });
+  }
+});
+
 app.get('/sw.js', (req: Request, res: Response) => {
-  const filePath = path.join(publicPath, 'sw.js');
-  if (fs.existsSync(filePath)) {
+  const filePath = getAssetPath('sw.js');
+  if (filePath) {
     res.setHeader('Content-Type', 'application/javascript');
     res.sendFile(filePath);
   } else {
@@ -664,8 +683,8 @@ app.get('/sw.js', (req: Request, res: Response) => {
 });
 
 app.get('/icon.svg', (req: Request, res: Response) => {
-  const filePath = path.join(publicPath, 'icon.svg');
-  if (fs.existsSync(filePath)) {
+  const filePath = getAssetPath('icon.svg');
+  if (filePath) {
     res.setHeader('Content-Type', 'image/svg+xml');
     res.sendFile(filePath);
   } else {
@@ -674,6 +693,7 @@ app.get('/icon.svg', (req: Request, res: Response) => {
 });
 
 app.use(express.static(publicPath));
+app.use(express.static(distPath));
 
 // ---------------- START SERVER & VITE MIDDLEWARE ----------------
 
