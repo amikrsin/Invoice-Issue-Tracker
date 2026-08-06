@@ -638,6 +638,27 @@ app.post('/api/admin/sheets-sync-all', authenticateUser, requireAdmin, async (re
   }
 });
 
+// ---------------- STATIC PWA ASSET ROUTES ----------------
+
+const publicPath = path.join(process.cwd(), 'public');
+
+app.get('/manifest.json', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.sendFile(path.join(publicPath, 'manifest.json'));
+});
+
+app.get('/sw.js', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.sendFile(path.join(publicPath, 'sw.js'));
+});
+
+app.get('/icon.svg', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.sendFile(path.join(publicPath, 'icon.svg'));
+});
+
+app.use(express.static(publicPath));
+
 // ---------------- START SERVER & VITE MIDDLEWARE ----------------
 
 async function start() {
@@ -651,6 +672,10 @@ async function start() {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req: Request, res: Response) => {
+      if (req.path.includes('.') && !req.path.endsWith('.html')) {
+        res.status(404).send('Asset not found');
+        return;
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
