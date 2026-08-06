@@ -326,14 +326,14 @@ class SheetsRepository {
     }
   }
 
-  // Sync to Google Sheets if configured
+  // Sync to Google Sheets if configured (asynchronous background worker with timeout)
   private async syncAppendToSheet(tabName: string, rowValues: any[]) {
     const sheets = this.getGoogleSheetsClient();
     const spreadsheetId = this.localStore.config.spreadsheetId;
     if (!sheets || !spreadsheetId) return;
 
     try {
-      await sheets.spreadsheets.values.append({
+      const appendPromise = sheets.spreadsheets.values.append({
         spreadsheetId,
         range: `${tabName}!A1`,
         valueInputOption: 'USER_ENTERED',
@@ -341,6 +341,13 @@ class SheetsRepository {
           values: [rowValues.map(val => (val === undefined || val === null ? '' : String(val)))],
         },
       });
+
+      // Timeout safety: 5000ms max for external Google API call
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Google Sheets API append timeout')), 5000)
+      );
+
+      await Promise.race([appendPromise, timeoutPromise]);
     } catch (e) {
       console.error(`Google Sheets syncAppend error on tab ${tabName}:`, e);
     }
@@ -352,7 +359,7 @@ class SheetsRepository {
     if (!sheets || !spreadsheetId) return;
 
     try {
-      await sheets.spreadsheets.values.update({
+      const updatePromise = sheets.spreadsheets.values.update({
         spreadsheetId,
         range: `${tabName}!A${rowIndexOneBased}`,
         valueInputOption: 'USER_ENTERED',
@@ -360,6 +367,13 @@ class SheetsRepository {
           values: [rowValues.map(val => (val === undefined || val === null ? '' : String(val)))],
         },
       });
+
+      // Timeout safety: 5000ms max for external Google API call
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Google Sheets API update timeout')), 5000)
+      );
+
+      await Promise.race([updatePromise, timeoutPromise]);
     } catch (e) {
       console.error(`Google Sheets syncUpdate error on tab ${tabName}:`, e);
     }
@@ -447,17 +461,34 @@ class SheetsRepository {
   }
 
   // Tab 2: Entries
-  public async fetchEntriesFromSheet(): Promise<Entry[]> {
+  private lastSheetFetchTime = 0;
+  private readonly FETCH_CACHE_TTL_MS = 30000; // 30 second cache TTL for reading remote sheet
+
+  public async fetchEntriesFromSheet(forceRefresh = false): Promise<Entry[]> {
+    const now = Date.now();
+    // Use cached local store if fetched recently and not forced
+    if (!forceRefresh && (now - this.lastSheetFetchTime < this.FETCH_CACHE_TTL_MS)) {
+      return this.localStore.entries;
+    }
+
     const sheets = this.getGoogleSheetsClient();
     const spreadsheetId = this.localStore.config.spreadsheetId;
     if (!sheets || !spreadsheetId) return this.localStore.entries;
 
     try {
-      const res = await sheets.spreadsheets.values.get({
+      this.lastSheetFetchTime = now;
+      const getPromise = sheets.spreadsheets.values.get({
         spreadsheetId,
         range: 'Entries!A2:Z10000',
       });
-      const rows = res.data.values;
+
+      // 4-second timeout for remote sheet read
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Google Sheets API get timeout')), 4000)
+      );
+
+      const res: any = await Promise.race([getPromise, timeoutPromise]);
+      const rows = res.data?.values;
       if (rows && Array.isArray(rows)) {
         const fetchedEntries: Entry[] = [];
         rows.forEach((row, idx) => {
@@ -507,8 +538,8 @@ class SheetsRepository {
     return this.localStore.entries;
   }
 
-  public async getEntries(includeDeleted = false): Promise<Entry[]> {
-    await this.fetchEntriesFromSheet().catch(() => {});
+  public async getEntries(includeDeleted = false, forceRefresh = false): Promise<Entry[]> {
+    await this.fetchEntriesFromSheet(forceRefresh).catch(() => {});
     if (includeDeleted) {
       return [...this.localStore.entries];
     }
