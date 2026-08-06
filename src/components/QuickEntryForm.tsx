@@ -1,18 +1,22 @@
 import React, { useState } from 'react';
 import { api } from '../lib/api';
 import { User, Entry } from '../types';
-import { PlusCircle, CheckCircle2, AlertCircle, ArrowRight, FileText, Calendar, Hash, Building2, UserCheck } from 'lucide-react';
+import { PlusCircle, CheckCircle2, AlertCircle, ArrowRight, FileText, Calendar, Hash, Building2, UserCheck, BarChart3, ListFilter } from 'lucide-react';
 
 interface QuickEntryFormProps {
   currentUser: User;
   onEntryAdded: (entry: Entry) => void;
   onViewEntries: () => void;
+  onViewDashboard?: () => void;
+  isStandalone?: boolean;
 }
 
 export const QuickEntryForm: React.FC<QuickEntryFormProps> = ({
   currentUser,
   onEntryAdded,
   onViewEntries,
+  onViewDashboard,
+  isStandalone = false,
 }) => {
   const today = new Date().toISOString().split('T')[0];
 
@@ -79,6 +83,29 @@ export const QuickEntryForm: React.FC<QuickEntryFormProps> = ({
           <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
             Vendor Bill
           </span>
+        </div>
+
+        {/* Quick Nav Sub-bar (View Log Entries & View Dashboard) */}
+        <div className="bg-slate-100/90 border-b border-slate-200/80 px-4 py-2 flex items-center justify-between text-xs font-semibold">
+          <button
+            type="button"
+            onClick={onViewEntries}
+            className="inline-flex items-center space-x-1.5 text-indigo-700 hover:text-indigo-900 transition-colors py-1 px-2.5 rounded-lg hover:bg-slate-200/80 active:scale-95"
+          >
+            <ListFilter className="w-3.5 h-3.5 text-indigo-600" />
+            <span>View Log Entries</span>
+          </button>
+
+          {onViewDashboard && (
+            <button
+              type="button"
+              onClick={onViewDashboard}
+              className="inline-flex items-center space-x-1.5 text-indigo-700 hover:text-indigo-900 transition-colors py-1 px-2.5 rounded-lg hover:bg-slate-200/80 active:scale-95"
+            >
+              <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
+              <span>View Dashboard</span>
+            </button>
+          )}
         </div>
 
         <div className="p-5 sm:p-6">

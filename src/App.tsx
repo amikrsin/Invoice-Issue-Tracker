@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, SheetsConfig } from './types';
 import { api, getStoredToken, setStoredToken, clearStoredToken } from './lib/api';
+import { ArrowLeft } from 'lucide-react';
 
 import { Header } from './components/Header';
 import { LoginScreen } from './components/LoginScreen';
@@ -22,6 +23,30 @@ export default function App() {
 
   // Active navigation tab (default: quick-entry)
   const [activeTab, setActiveTab] = useState<string>('quick-entry');
+
+  // Detect standalone / installed mode
+  const [isStandalone, setIsStandalone] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true ||
+      new URLSearchParams(window.location.search).get('display') === 'standalone'
+    );
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(display-mode: standalone)');
+    const handleChange = (e: MediaQueryListEvent) => {
+      setIsStandalone(
+        e.matches ||
+        (window.navigator as any).standalone === true ||
+        new URLSearchParams(window.location.search).get('display') === 'standalone'
+      );
+    };
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
 
   // Sheets Config state
   const [sheetsConfig, setSheetsConfig] = useState<SheetsConfig | null>(null);
@@ -119,10 +144,24 @@ export default function App() {
         onChangePasswordClick={() => setShowChangePasswordModal(true)}
         onOpenSheetsConfig={() => setShowSheetsConfigModal(true)}
         sheetsConfig={sheetsConfig}
+        isStandalone={isStandalone}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 pb-12">
+      <main className={`flex-1 pb-12 ${isStandalone ? 'max-w-xl mx-auto w-full px-2 sm:px-4' : ''}`}>
+        {/* Standalone 'Back to Quick Entry' Navigation Affordance */}
+        {isStandalone && activeTab !== 'quick-entry' && (
+          <div className="pt-3 pb-1">
+            <button
+              onClick={() => setActiveTab('quick-entry')}
+              className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 border border-slate-700 active:scale-98"
+            >
+              <ArrowLeft className="w-4 h-4 text-indigo-400" />
+              <span>Back to Quick Entry</span>
+            </button>
+          </div>
+        )}
+
         {activeTab === 'quick-entry' && (
           <QuickEntryForm
             currentUser={currentUser}
@@ -130,6 +169,8 @@ export default function App() {
               setRefreshEntriesCount((prev) => prev + 1);
             }}
             onViewEntries={() => setActiveTab('entries')}
+            onViewDashboard={() => setActiveTab('dashboard')}
+            isStandalone={isStandalone}
           />
         )}
 
